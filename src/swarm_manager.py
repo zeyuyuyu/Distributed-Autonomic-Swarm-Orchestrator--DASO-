@@ -1,94 +1,96 @@
-import time
-import logging
+import asyncio
 from typing import Dict, List, Optional
 from dataclasses import dataclass
-from threading import Lock
+import time
 
 @dataclass
-class NodeStatus:
-    last_heartbeat: float
-    load: float
-    tasks_running: int
-    healthy: bool
+class SwarmNode:
+    id: str
+    ip: str
+    port: int
+    load: float = 0.0
+    last_heartbeat: float = 0.0
+    status: str = 'healthy'
 
 class SwarmManager:
-    def __init__(self, heartbeat_timeout: float = 30.0):
-        self.nodes: Dict[str, NodeStatus] = {}
-        self.node_lock = Lock()
-        self.heartbeat_timeout = heartbeat_timeout
-        self.logger = logging.getLogger(__name__)
+    def __init__(self):
+        self.nodes: Dict[str, SwarmNode] = {}
+        self.health_check_interval = 10  # seconds
+        self.heartbeat_timeout = 30  # seconds
 
-    def register_node(self, node_id: str) -> bool:
-        with self.node_lock:
-            if node_id in self.nodes:
-                return False
-            self.nodes[node_id] = NodeStatus(
-                last_heartbeat=time.time(),
-                load=0.0,
-                tasks_running=0,
-                healthy=True
-            )
-            self.logger.info(f'Node {node_id} registered successfully')
-            return True
+    async def register_node(self, node_id: str, ip: str, port: int) -> None:
+        """Register a new node in the swarm"""
+        self.nodes[node_id] = SwarmNode(
+            id=node_id,
+            ip=ip,
+            port=port,
+            last_heartbeat=time.time()
+        )
+        print(f'Node {node_id} registered at {ip}:{port}')
 
-    def update_heartbeat(self, node_id: str, load: float, tasks: int) -> None:
-        with self.node_lock:
-            if node_id not in self.nodes:
-                self.logger.warning(f'Received heartbeat from unknown node {node_id}')
-                return
-            
-            self.nodes[node_id] = NodeStatus(
-                last_heartbeat=time.time(),
-                load=load,
-                tasks_running=tasks,
-                healthy=True
-            )
+    async def heartbeat(self, node_id: str, load: float) -> None:
+        """Update node heartbeat and load information"""
+        if node_id in self.nodes:
+            self.nodes[node_id].last_heartbeat = time.time()
+            self.nodes[node_id].load = load
+            self.nodes[node_id].status = 'healthy'
 
-    def check_node_health(self) -> List[str]:
-        unhealthy_nodes = []
-        current_time = time.time()
-        
-        with self.node_lock:
-            for node_id, status in self.nodes.items():
-                if current_time - status.last_heartbeat > self.heartbeat_timeout:
-                    status.healthy = False
-                    unhealthy_nodes.append(node_id)
-                    self.logger.warning(f'Node {node_id} appears to be unhealthy')
-        
-        return unhealthy_nodes
-
-    def get_best_node(self) -> Optional[str]:
-        with self.node_lock:
-            available_nodes = [
-                (node_id, status) for node_id, status in self.nodes.items()
-                if status.healthy and status.load < 0.8  # 80% load threshold
-            ]
-            
-            if not available_nodes:
-                return None
-            
-            # Sort by load and number of tasks
-            available_nodes.sort(key=lambda x: (x[1].load, x[1].tasks_running))
-            return available_nodes[0][0]
-
-    def remove_node(self, node_id: str) -> bool:
-        with self.node_lock:
-            if node_id not in self.nodes:
-                return False
+    async def remove_node(self, node_id: str) -> None:
+        """Remove a node from the swarm"""
+        if node_id in self.nodes:
             del self.nodes[node_id]
-            self.logger.info(f'Node {node_id} removed from swarm')
-            return True
+            print(f'Node {node_id} removed from swarm')
 
-    def get_swarm_stats(self) -> Dict:
-        with self.node_lock:
-            total_nodes = len(self.nodes)
-            healthy_nodes = sum(1 for status in self.nodes.values() if status.healthy)
-            total_tasks = sum(status.tasks_running for status in self.nodes.values())
-            avg_load = sum(status.load for status in self.nodes.values()) / total_nodes if total_nodes > 0 else 0
+    def get_optimal_node(self) -> Optional[SwarmNode]:
+        """Get the node with lowest load for task assignment"""
+        healthy_nodes = [n for n in self.nodes.values() 
+                        if n.status == 'healthy']
+        if not healthy_nodes:
+            return None
+        return min(healthy_nodes, key=lambda x: x.load)
 
-            return {
-                'total_nodes': total_nodes,
-                'healthy_nodes': healthy_nodes,
-                'total_tasks': total_tasks,
-                'average_load': avg_load
-            }
+    async def health_monitor(self) -> None:
+        """Monitor node health and remove dead nodes"""
+        while True:
+            current_time = time.time()
+            dead_nodes = []
+
+            for node_id, node in self.nodes.items():
+                time_since_heartbeat = current_time - node.last_heartbeat
+                
+                if time_since_heartbeat > self.heartbeat_timeout:
+                    node.status = 'dead'
+                    dead_nodes.append(node_id)
+                elif time_since_heartbeat > self.health_check_interval:
+                    node.status = 'warning'
+
+            # Remove dead nodes
+            for node_id in dead_nodes:
+                await self.remove_node(node_id)
+
+            await asyncio.sleep(self.health_check_interval)
+
+    def get_swarm_status(self) -> Dict:
+        """Get overall swarm status and statistics"""
+        total_nodes = len(self.nodes)
+        healthy_nodes = len([n for n in self.nodes.values() 
+                           if n.status == 'healthy'])
+        warning_nodes = len([n for n in self.nodes.values() 
+                           if n.status == 'warning'])
+        dead_nodes = len([n for n in self.nodes.values() 
+                         if n.status == 'dead'])
+        avg_load = sum(n.load for n in self.nodes.values()) / total_nodes \
+                   if total_nodes > 0 else 0
+
+        return {
+            'total_nodes': total_nodes,
+            'healthy_nodes': healthy_nodes,
+            'warning_nodes': warning_nodes,
+            'dead_nodes': dead_nodes,
+            'average_load': avg_load
+        }
+
+    async def start(self) -> None:
+        """Start the swarm manager"""
+        print('Starting Swarm Manager...')
+        await self.health_monitor()
