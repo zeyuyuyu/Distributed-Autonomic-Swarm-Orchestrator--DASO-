@@ -1,97 +1,134 @@
-from typing import Dict, List, Optional
+#!/usr/bin/env python3
+
+from typing import Dict, List, Set
 from dataclasses import dataclass
-import time
+from enum import Enum
 import hashlib
+import time
+
+class MessageType(Enum):
+    PRE_PREPARE = 'pre-prepare'
+    PREPARE = 'prepare'
+    COMMIT = 'commit'
+    REPLY = 'reply'
 
 @dataclass
-class Vote:
-    voter_id: str
-    proposal_id: str
+class ConsensusMessage:
+    msg_type: MessageType
+    view_num: int
+    seq_num: int
+    digest: str
+    node_id: str
     timestamp: float
-    weight: float
-    signature: str
+    signature: str = ''
 
-@dataclass 
-class Proposal:
-    id: str
-    content: Dict
-    timestamp: float
-    status: str = 'pending'
-    votes: List[Vote] = None
+class PBFTConsensus:
+    def __init__(self, node_id: str, total_nodes: int):
+        self.node_id = node_id
+        self.total_nodes = total_nodes
+        self.f = (total_nodes - 1) // 3  # Max Byzantine nodes tolerated
+        self.view_num = 0
+        self.seq_num = 0
+        self.prepared_msgs: Dict[int, Set[ConsensusMessage]] = {}
+        self.committed_msgs: Dict[int, Set[ConsensusMessage]] = {}
+        
+    def _calculate_digest(self, data: str) -> str:
+        return hashlib.sha256(data.encode()).hexdigest()
+    
+    def _verify_signature(self, msg: ConsensusMessage) -> bool:
+        # TODO: Implement actual signature verification
+        return True
 
-class ConsensusEngine:
-    def __init__(self, min_quorum: float = 0.67):
-        self.proposals: Dict[str, Proposal] = {}
-        self.min_quorum = min_quorum
-        self.validators: Dict[str, float] = {}
+    def start_consensus(self, data: str) -> bool:
+        """Initiates consensus process for given data"""
+        digest = self._calculate_digest(data)
         
-    def register_validator(self, validator_id: str, weight: float = 1.0) -> None:
-        """Register a validator with an optional voting weight"""
-        self.validators[validator_id] = weight
-        
-    def create_proposal(self, content: Dict) -> str:
-        """Create a new proposal and return its ID"""
-        proposal_id = hashlib.sha256(
-            f"{content}{time.time()}".encode()
-        ).hexdigest()
-        
-        self.proposals[proposal_id] = Proposal(
-            id=proposal_id,
-            content=content,
-            timestamp=time.time(),
-            votes=[]
+        # Create pre-prepare message
+        pre_prepare = ConsensusMessage(
+            msg_type=MessageType.PRE_PREPARE,
+            view_num=self.view_num,
+            seq_num=self.seq_num,
+            digest=digest,
+            node_id=self.node_id,
+            timestamp=time.time()
         )
-        return proposal_id
-
-    def submit_vote(self, voter_id: str, proposal_id: str, signature: str) -> bool:
-        """Submit a vote for a proposal"""
-        if voter_id not in self.validators:
-            raise ValueError("Invalid validator")
-            
-        if proposal_id not in self.proposals:
-            raise ValueError("Invalid proposal")
-            
-        proposal = self.proposals[proposal_id]
         
-        # Check if validator already voted
-        if any(v.voter_id == voter_id for v in proposal.votes):
+        return self.handle_pre_prepare(pre_prepare)
+
+    def handle_pre_prepare(self, msg: ConsensusMessage) -> bool:
+        if not self._verify_signature(msg):
             return False
             
-        vote = Vote(
-            voter_id=voter_id,
-            proposal_id=proposal_id,
-            timestamp=time.time(),
-            weight=self.validators[voter_id],
-            signature=signature
+        if msg.seq_num not in self.prepared_msgs:
+            self.prepared_msgs[msg.seq_num] = set()
+            
+        self.prepared_msgs[msg.seq_num].add(msg)
+        
+        # Send prepare message
+        prepare = ConsensusMessage(
+            msg_type=MessageType.PREPARE,
+            view_num=msg.view_num,
+            seq_num=msg.seq_num,
+            digest=msg.digest,
+            node_id=self.node_id,
+            timestamp=time.time()
         )
         
-        proposal.votes.append(vote)
-        self._check_consensus(proposal_id)
-        return True
-        
-    def _check_consensus(self, proposal_id: str) -> None:
-        """Check if consensus has been reached for a proposal"""
-        proposal = self.proposals[proposal_id]
-        
-        total_weight = sum(self.validators.values())
-        vote_weight = sum(vote.weight for vote in proposal.votes)
-        
-        if vote_weight / total_weight >= self.min_quorum:
-            proposal.status = 'accepted'
-        
-    def get_proposal_status(self, proposal_id: str) -> Optional[str]:
-        """Get the current status of a proposal"""
-        if proposal_id not in self.proposals:
-            return None
-        return self.proposals[proposal_id].status
+        return self.handle_prepare(prepare)
 
-    def get_vote_weights(self, proposal_id: str) -> float:
-        """Get the total vote weights for a proposal"""
-        if proposal_id not in self.proposals:
-            return 0.0
-        return sum(v.weight for v in self.proposals[proposal_id].votes)
-
-    def validate_signature(self, vote: Vote) -> bool:
-        """Validate the cryptographic signature of a vote"""
-        # TODO: Implement actual signature validation
+    def handle_prepare(self, msg: ConsensusMessage) -> bool:
+        if not self._verify_signature(msg):
+            return False
+            
+        if msg.seq_num not in self.prepared_msgs:
+            self.prepared_msgs[msg.seq_num] = set()
+            
+        self.prepared_msgs[msg.seq_num].add(msg)
+        
+        # Check if we have 2f+1 prepare messages
+        prepares = len([m for m in self.prepared_msgs[msg.seq_num] 
+                       if m.msg_type == MessageType.PREPARE])
+                       
+        if prepares >= 2 * self.f + 1:
+            # Send commit message
+            commit = ConsensusMessage(
+                msg_type=MessageType.COMMIT,
+                view_num=msg.view_num,
+                seq_num=msg.seq_num,
+                digest=msg.digest,
+                node_id=self.node_id,
+                timestamp=time.time()
+            )
+            return self.handle_commit(commit)
+            
         return True
+
+    def handle_commit(self, msg: ConsensusMessage) -> bool:
+        if not self._verify_signature(msg):
+            return False
+            
+        if msg.seq_num not in self.committed_msgs:
+            self.committed_msgs[msg.seq_num] = set()
+            
+        self.committed_msgs[msg.seq_num].add(msg)
+        
+        # Check if we have 2f+1 commit messages
+        commits = len([m for m in self.committed_msgs[msg.seq_num]
+                      if m.msg_type == MessageType.COMMIT])
+                      
+        if commits >= 2 * self.f + 1:
+            # Consensus achieved!
+            self.seq_num += 1
+            return True
+            
+        return True
+
+    def get_committed_messages(self) -> List[ConsensusMessage]:
+        """Returns list of all committed messages in order"""
+        committed = []
+        for seq in sorted(self.committed_msgs.keys()):
+            commits = [m for m in self.committed_msgs[seq]
+                      if m.msg_type == MessageType.COMMIT]
+            if len(commits) >= 2 * self.f + 1:
+                committed.append(commits[0])
+        return committed
