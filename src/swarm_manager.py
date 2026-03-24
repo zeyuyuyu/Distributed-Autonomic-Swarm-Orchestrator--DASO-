@@ -1,39 +1,45 @@
+import asyncio
 import random
-import time
+from typing import List, Tuple
+
+from .consensus import ConsensusManager
 
 class SwarmManager:
-    def __init__(self, num_nodes):
-        self.num_nodes = num_nodes
-        self.node_loads = [0] * num_nodes
-        self.task_queue = []
+    def __init__(self, nodes: List[str], consensus_manager: ConsensusManager):
+        self.nodes = nodes
+        self.consensus_manager = consensus_manager
 
-    def add_task(self, task):
-        self.task_queue.append(task)
-        self.balance_load()
-
-    def balance_load(self):
-        while self.task_queue:
-            task = self.task_queue.pop(0)
-            least_loaded_node = min(range(self.num_nodes), key=lambda i: self.node_loads[i])
-            self.node_loads[least_loaded_node] += task.duration
-            print(f'Assigned task to node {least_loaded_node}, new load: {self.node_loads[least_loaded_node]}')
-
-    def simulate_task_execution(self):
+    async def orchestrate_swarm(self) -> None:
+        """Orchestrate the distributed swarm using consensus-based decision making."""
         while True:
-            for i in range(self.num_nodes):
-                if self.node_loads[i] > 0:
-                    self.node_loads[i] -= 1
-                    print(f'Node {i} load reduced by 1, new load: {self.node_loads[i]}')
-            time.sleep(1)
-            self.balance_load()
+            # Gather current state of the swarm
+            swarm_state = await self._gather_swarm_state()
 
-class Task:
-    def __init__(self, duration):
-        self.duration = duration
+            # Reach consensus on the next action
+            action, target_nodes = await self.consensus_manager.reach_consensus(swarm_state)
 
-# Example usage
-swarm_manager = SwarmManager(num_nodes=5)
-swarm_manager.add_task(Task(duration=5))
-swarm_manager.add_task(Task(duration=3))
-swarm_manager.add_task(Task(duration=7))
-swarm_manager.simulate_task_execution()
+            # Execute the consensus-based action
+            await self._execute_swarm_action(action, target_nodes)
+
+            # Wait for a random interval before the next orchestration cycle
+            await asyncio.sleep(random.uniform(1, 5))
+
+    async def _gather_swarm_state(self) -> Tuple[str, ...]:
+        """Gather the current state of the swarm from the connected nodes."""
+        swarm_state = []
+        for node in self.nodes:
+            # Fetch the state of the node
+            node_state = await self._fetch_node_state(node)
+            swarm_state.append(node_state)
+        return tuple(swarm_state)
+
+    async def _fetch_node_state(self, node: str) -> str:
+        """Fetch the current state of a specific node in the swarm."""
+        # Implement the logic to fetch the state of the node
+        return f"Node {node} state"
+
+    async def _execute_swarm_action(self, action: str, target_nodes: Tuple[str, ...]) -> None:
+        """Execute the consensus-based action on the target nodes in the swarm."""
+        for node in target_nodes:
+            # Implement the logic to execute the action on the target node
+            print(f"Executing action '{action}' on node {node}")
