@@ -1,45 +1,63 @@
-import asyncio
+# src/swarm_manager.py
 import random
-from typing import List, Tuple
+import time
+from typing import List
 
-from .consensus import ConsensusManager
+from .consensus import reach_consensus
 
 class SwarmManager:
-    def __init__(self, nodes: List[str], consensus_manager: ConsensusManager):
-        self.nodes = nodes
-        self.consensus_manager = consensus_manager
+    def __init__(self, num_nodes: int, heartbeat_interval: float = 5.0):
+        self.num_nodes = num_nodes
+        self.heartbeat_interval = heartbeat_interval
+        self.nodes = [Node(i) for i in range(num_nodes)]
+        self.healthy_nodes = self.nodes.copy()
 
-    async def orchestrate_swarm(self) -> None:
-        """Orchestrate the distributed swarm using consensus-based decision making."""
+    def start(self):
         while True:
-            # Gather current state of the swarm
-            swarm_state = await self._gather_swarm_state()
+            self.monitor_nodes()
+            self.heal_swarm()
+            time.sleep(self.heartbeat_interval)
 
-            # Reach consensus on the next action
-            action, target_nodes = await self.consensus_manager.reach_consensus(swarm_state)
-
-            # Execute the consensus-based action
-            await self._execute_swarm_action(action, target_nodes)
-
-            # Wait for a random interval before the next orchestration cycle
-            await asyncio.sleep(random.uniform(1, 5))
-
-    async def _gather_swarm_state(self) -> Tuple[str, ...]:
-        """Gather the current state of the swarm from the connected nodes."""
-        swarm_state = []
+    def monitor_nodes(self):
         for node in self.nodes:
-            # Fetch the state of the node
-            node_state = await self._fetch_node_state(node)
-            swarm_state.append(node_state)
-        return tuple(swarm_state)
+            if node.is_healthy():
+                continue
+            if node.check_health():
+                self.healthy_nodes.append(node)
+            else:
+                self.healthy_nodes.remove(node)
 
-    async def _fetch_node_state(self, node: str) -> str:
-        """Fetch the current state of a specific node in the swarm."""
-        # Implement the logic to fetch the state of the node
-        return f"Node {node} state"
+    def heal_swarm(self):
+        if len(self.healthy_nodes) < self.num_nodes:
+            print(f'Swarm health is degraded. Healthy nodes: {len(self.healthy_nodes)}/{self.num_nodes}')
+            self.redistribute_workload()
+            self.spawn_new_nodes()
 
-    async def _execute_swarm_action(self, action: str, target_nodes: Tuple[str, ...]) -> None:
-        """Execute the consensus-based action on the target nodes in the swarm."""
-        for node in target_nodes:
-            # Implement the logic to execute the action on the target node
-            print(f"Executing action '{action}' on node {node}")
+    def redistribute_workload(self):
+        # Reach consensus on workload distribution among healthy nodes
+        workload_distribution = reach_consensus(self.healthy_nodes)
+        for node, tasks in workload_distribution.items():
+            node.assign_tasks(tasks)
+
+    def spawn_new_nodes(self):
+        # Spawn new nodes to replace unhealthy ones
+        new_nodes = [Node(len(self.nodes) + i) for i in range(self.num_nodes - len(self.healthy_nodes))]
+        self.nodes.extend(new_nodes)
+        self.healthy_nodes.extend(new_nodes)
+
+class Node:
+    def __init__(self, id: int):
+        self.id = id
+        self.tasks = []
+        self.health = random.randint(0, 100)
+
+    def is_healthy(self) -> bool:
+        return self.health >= 50
+
+    def check_health(self) -> bool:
+        # Simulate node health check
+        self.health = random.randint(0, 100)
+        return self.is_healthy()
+
+    def assign_tasks(self, tasks: List[str]):
+        self.tasks = tasks
